@@ -1295,9 +1295,12 @@ function buildWalls() {
       addBox(plaster, px,.88,pz, thick+.1,.9,.1, COL.plasterWarm, q, .02, rng.r.bind(rng));
     }
   }
-  // side walls
-  wallSegment(-9.65, 8.9, -9.65, -4.6);
-  wallSegment(9.65, 8.9, 9.65, -4.6);
+  // side walls, run back to the house facade
+  wallSegment(-9.65, 8.9, -9.65, -4.72);
+  wallSegment(9.65, 8.9, 9.65, -4.72);
+  // rear wing walls close the compound against the house corners
+  wallSegment(-9.65, -4.72, -5.1, -4.72);
+  wallSegment(5.1, -4.72, 9.65, -4.72);
   // front wall with gate opening
   wallSegment(-9.65, 9.1, -1.06, 9.1);
   wallSegment(1.06, 9.1, 9.65, 9.1);
