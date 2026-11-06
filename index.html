@@ -2062,6 +2062,7 @@ function setWeather(kind) {
   if (kind === 'rain') showToast('云压下来了，瓦檐开始滴水');
   else if (kind === 'cloudy') showToast('天色转阴，风里带着一点湿意');
   else showToast('云开了，日光重新落进院子');
+  scheduleGardenSave();
 }
 function updateEnvironment(dt) {
   env.elapsed += dt;
@@ -2440,6 +2441,7 @@ function sowAt(bed, x, z) {
   slot.plant=p; plants.push(p);
   addWaterAt(slot.x, slot.z, .18, .28);
   showToast('在' + bed.name + '播下了' + def.name);
+  scheduleGardenSave();
   return true;
 }
 function harvestPlant(p) {
@@ -2493,6 +2495,7 @@ function updateHarvestAnims(dt) {
         a.done = true;
         basket[a.crop] = (basket[a.crop]||0) + 1;
         updateBasketUI();
+        scheduleGardenSave();
       }
       if (a.t > a.delay + a.dur + .1) harvestAnims.splice(i,1);
     }
@@ -2796,6 +2799,7 @@ function toolActionAt(bed, point) {
     addWaterAt(point[0],point[2],.015,.3);
     spawnSplash(point[0], bed.topY+.04, point[2], .5, true);
     showToast('松开了'+bed.name+'的土，土垄渐渐成形');
+    scheduleGardenSave();
     return true;
   }
   if (state.tool==='seed') {
@@ -4385,6 +4389,154 @@ async function debugShadowImage() {
 }
 
 
+/* ===== 55_persist.js ===== */
+// ── Persistence: keep the garden between visits ──────────────────────────────
+// localStorage instead of cookies: the 64×64 soil grid alone is ~11 KB, well past
+// the ~4 KB cookie limit, and none of this data needs to travel to a server.
+const GARDEN_SAVE_KEY = 'yifangxiaoyuan.garden.v1';
+const GARDEN_SAVE_VERSION = 1;
+let gardenRestored = false;
+let gardenSavePending = null;
+
+function gardenEncodeGrid(src, scale = 1) {
+  const bytes = new Uint8Array(src.length);
+  for (let i=0;i<src.length;i++) bytes[i] = Math.round(clamp(src[i]*scale, 0, 1)*255);
+  let text = '';
+  for (let i=0;i<bytes.length;i+=0x8000) {
+    text += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000));
+  }
+  try { return btoa(text); } catch { return ''; }
+}
+function gardenDecodeGrid(text, length, scale = 1) {
+  try {
+    const bin = atob(text || '');
+    if (bin.length !== length) return null;
+    const out = new Float32Array(length);
+    for (let i=0;i<length;i++) out[i] = bin.charCodeAt(i)/255/scale;
+    return out;
+  } catch { return null; }
+}
+function serializeGarden() {
+  const bedIndex = new Map(BEDS.map((b,i)=>[b,i]));
+  return {
+    v: GARDEN_SAVE_VERSION,
+    savedAt: Date.now(),
+    basket: { ...basket },
+    pendingHarvest: harvestAnims.filter(a=>!a.done).map(a=>a.crop),
+    can: state.waterCan,
+    growthSpeed: state.growthSpeed,
+    hour: env.hour,
+    weather: env.weather,
+    vat: VAT.level,
+    beds: BEDS.map(b=>({ ridge:b.ridge, target:b.ridgeTarget ?? b.ridge, tilled: !!b.tilled })),
+    plants: plants.filter(p=>!p.removed).map(p=>({
+      bed: bedIndex.get(p.bed) ?? -1,
+      slot: p.bed ? p.bed.slots.indexOf(p.slot) : -1,
+      type: p.type, growth: p.growth, health: p.health,
+      phase: p.phase, seed: p.seed || 0,
+    })),
+    moist: gardenEncodeGrid(SOIL.moist),
+    puddle: gardenEncodeGrid(SOIL.puddle, 3.2),
+  };
+}
+function saveGarden() {
+  clearTimeout(gardenSavePending);
+  gardenSavePending = null;
+  try {
+    localStorage.setItem(GARDEN_SAVE_KEY, JSON.stringify(serializeGarden()));
+  } catch (e) {
+    // Private mode or a full quota: keep playing, just without persistence.
+  }
+}
+function scheduleGardenSave(delay = 900) {
+  clearTimeout(gardenSavePending);
+  gardenSavePending = setTimeout(saveGarden, delay);
+}
+function restoreGarden() {
+  let data = null;
+  try { data = JSON.parse(localStorage.getItem(GARDEN_SAVE_KEY) || 'null'); } catch (e) { data = null; }
+  if (!data || data.v !== GARDEN_SAVE_VERSION) return false;
+  try {
+    const moist = gardenDecodeGrid(data.moist, SOIL.moist.length);
+    const puddle = gardenDecodeGrid(data.puddle, SOIL.puddle.length, 3.2);
+    if (moist && puddle) {
+      SOIL.moist.set(moist);
+      SOIL.puddle.set(puddle);
+      SOIL.dirty = true;
+    }
+    if (Array.isArray(data.beds) && data.beds.length === BEDS.length) {
+      data.beds.forEach((b,i)=>{
+        const bed = BEDS[i];
+        const ridge = Number(b.ridge), target = Number(b.target);
+        if (Number.isFinite(ridge)) bed.ridge = clamp(ridge, .2, 1.25);
+        bed.ridgeTarget = Number.isFinite(target) ? clamp(target, .2, 1.25) : bed.ridge;
+        bed.tilled = !!b.tilled;
+      });
+    }
+    for (const bed of BEDS) for (const slot of bed.slots) slot.plant = null;
+    plants.length = 0;
+    for (const d of (Array.isArray(data.plants) ? data.plants : [])) {
+      const bed = BEDS[d.bed];
+      if (!bed || !CROPS[d.type] || !Number.isInteger(d.slot)) continue;
+      const slot = bed.slots[d.slot];
+      if (!slot) continue;
+      const p = {
+        type: d.type, x: slot.x, z: slot.z, y: bed.topY + .045,
+        growth: clamp(Number(d.growth) || 0, 0, 1),
+        health: clamp(Number.isFinite(d.health) ? d.health : 1, .1, 1),
+        dry: 0, phase: Number(d.phase) || 0,
+        slot, bed, harvesting: false, seed: d.seed || 0,
+      };
+      slot.plant = p;
+      plants.push(p);
+    }
+    if (data.basket) {
+      for (const k of Object.keys(basket)) {
+        const n = Number(data.basket[k]);
+        basket[k] = Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+      }
+    }
+    // A harvest that was still flying to the basket when the page closed.
+    if (Array.isArray(data.pendingHarvest)) {
+      for (const c of data.pendingHarvest) if (c in basket) basket[c] += 1;
+    }
+    const can = Number(data.can);
+    if (Number.isFinite(can)) state.waterCan = clamp(can, 0, 100);
+    const speed = Number(data.growthSpeed);
+    if (Number.isFinite(speed)) state.growthSpeed = clamp(Math.round(speed), 1, 40);
+    const hour = Number(data.hour);
+    if (Number.isFinite(hour)) env.hour = ((hour % 24) + 24) % 24;
+    const preset = WEATHER_PRESETS[data.weather];
+    if (preset) {
+      env.weather = data.weather;
+      env.cloud = preset.cloud;
+      env.rain = preset.rain;
+      env.targetCloud = preset.cloud;
+      env.targetRain = preset.rain;
+    }
+    const vat = Number(data.vat);
+    if (Number.isFinite(vat)) VAT.level = clamp(vat, .08, .98);
+    gardenRestored = true;
+    return true;
+  } catch (e) {
+    gardenRestored = false;
+    return false;
+  }
+}
+function clearGardenSave() {
+  try { localStorage.removeItem(GARDEN_SAVE_KEY); } catch (e) { /* ignore */ }
+}
+function startGardenAutosave() {
+  if (startGardenAutosave.started) return;
+  startGardenAutosave.started = true;
+  setInterval(saveGarden, 6000);
+  window.addEventListener('pagehide', saveGarden);
+  window.addEventListener('beforeunload', saveGarden);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) saveGarden(); });
+  document.addEventListener('pointerup', () => scheduleGardenSave(1200), true);
+}
+
+
 /* ===== 60_main.js ===== */
 // ── Interaction, UI and main loop ───────────────────────────────────────────
 let hover = null;
@@ -4457,13 +4609,15 @@ function bindUI() {
     syncTimePlayUI();
     updateTimeUI(true);
     if (GPU.ready) updateEnvironment(0);
+    scheduleGardenSave();
   });
   ui.timePlay.addEventListener('click', () => {
     env.autoTime = !env.autoTime;
     syncTimePlayUI();
     showToast(env.autoTime ? '让时间重新流动' : '时间停在这一刻');
+    scheduleGardenSave();
   });
-  ui.growthRange.addEventListener('input', () => { state.growthSpeed = parseInt(ui.growthRange.value,10); updateGrowthUI(); });
+  ui.growthRange.addEventListener('input', () => { state.growthSpeed = parseInt(ui.growthRange.value,10); updateGrowthUI(); scheduleGardenSave(); });
   ui.helpBtn.addEventListener('click', () => ui.helpPanel.classList.add('show'));
   ui.helpClose.addEventListener('click', () => ui.helpPanel.classList.remove('show'));
   ui.helpPanel.addEventListener('click', e => { if (e.target === ui.helpPanel) ui.helpPanel.classList.remove('show'); });
@@ -4915,6 +5069,7 @@ function refillCan() {
   VAT.level=Math.max(.07,VAT.level-.16);
   updateCanUI();
   showToast('水壶灌满了檐下的雨水');
+  scheduleGardenSave();
 }
 function updateWatering(dt) {
   watering.tilt = damp(watering.tilt, watering.active ? .95 : .08, 5.2, dt);
@@ -4982,7 +5137,7 @@ function tick(now) {
     setTimeout(()=>{
       ui.loading.classList.add('hide');
       ui.ui.classList.add('ready');
-      setTimeout(()=>showToast('先给菜地浇一点水，再把作物时辰调快些'), 1300);
+      setTimeout(()=>showToast(gardenRestored ? '院子还在，菜也还在原来的畦里' : '先给菜地浇一点水，再把作物时辰调快些'), 1300);
     }, 420);
   }
   requestAnimationFrame(tick);
@@ -4994,6 +5149,7 @@ async function boot() {
   initPlants();
   initAgents();
   initPondFish();
+  restoreGarden();
   env.autoTime = true;
   updateEnvironment(.016);
   bindUI();
@@ -5005,6 +5161,8 @@ async function boot() {
   if (ui.loadTip) ui.loadTip.textContent='正在铺石引水，搭起檐下竹架……';
   try {
     await initWebGPU();
+    if (gardenRestored) for (const bed of BEDS) updateBedRidgeMaterial(bed);
+    startGardenAutosave();
     if (ui.loadTip) ui.loadTip.textContent='正在点灯，让院里的人间气慢慢升起来……';
     lastFrame=performance.now();
     requestAnimationFrame(tick);
@@ -5029,6 +5187,8 @@ window.__garden = {
   focus(x,z,dist=9,pitch=.32,yaw=.25){ camera.target=[x,.8,z]; camera.dist=dist; camera.pitch=pitch; camera.yaw=yaw; },
   debugShadow: (...a)=>debugShadowReadback(...a),
   debugShadowImage: (...a)=>debugShadowImage(...a),
+  saveGarden, restoreGarden, clearGardenSave, get gardenRestored(){ return gardenRestored; },
+  stageOf, sampleMoisture, updateGrowthUI,
   selectTool, selectSeed, updateHover,
   project(p){
     if(!GPU.viewProj) computeCameraMatrices();
