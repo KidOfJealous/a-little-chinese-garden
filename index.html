@@ -1463,6 +1463,13 @@ const VAT = { x:6.28, z:-3.05, y:0, r:.68, level:.62, targetLevel:.62 };
 const BASKET = { x:4.55, z:4.55, y:0, r:.42 };
 const MILL = { x:-6.05, z:-1.82 };
 const CHICKEN_HOME = { x:7.6, z:6.35 };
+const POND = {
+  x:6.95, z:1.05, r:1.66, rimR:1.94, waterY:.165,
+  ripples:[], rippleTimer:.8, feedTimer:0,
+};
+function insidePond(x, z, margin = 0) {
+  return Math.hypot(x - POND.x, z - POND.z) < POND.rimR + margin;
+}
 
 function addLathe(mb, cx, cz, profile, seg, col, capTop = false, capBottom = true) {
   const base = mb.count;
@@ -1684,7 +1691,7 @@ function buildGrass() {
   const spots = [];
   for (let i=0;i<220;i++) {
     const x=rng.range(-9.2,9.2), z=rng.range(-3.6,8.8);
-    if (bedAt(x,z)) continue;
+    if (bedAt(x,z) || insidePond(x,z,.12)) continue;
     if (x>-5.5 && x<5.5 && z>-3.2 && z<4.5 && rng.chance(.63)) continue;
     if (Math.abs(x)<.55 && z>-1 && rng.chance(.75)) continue;
     spots.push([x,z]);
@@ -1694,9 +1701,105 @@ function buildGrass() {
   const moss = G('ground');
   for (let i=0;i<18;i++) {
     const x=rng.range(-8.5,8.5), z=rng.range(-3.4,8.4);
-    if (bedAt(x,z)) continue;
+    if (bedAt(x,z) || insidePond(x,z,.1)) continue;
     addDisc(moss, x, .035, z, rng.range(.08,.2), COL.moss, rng.int(7,10));
   }
+}
+
+function buildPond() {
+  const rng = new RNG(40421);
+  const stone = G('stone'), cloth = G('cloth'), bamboo = G('bamboo');
+  // silt bed reaches under the stones so no bare ground shows at the shoreline
+  addDisc(stone, POND.x, .03, POND.z, POND.rimR + .18, color('#525441'), 44);
+  // a few muted pebbles on the bottom, just enough to suggest shallows
+  for (let i=0;i<11;i++) {
+    const a = rng.range(0,TAU), rr = Math.sqrt(rng.next())*POND.r*.86;
+    addSphere(stone, [POND.x+Math.cos(a)*rr, .045, POND.z+Math.sin(a)*rr],
+      rng.range(.05,.1), rng.range(.018,.04), rng.range(.05,.1),
+      i%4===0 ? color('#6b6d5b') : COL.stoneDark, 6, 4,
+      quat.axisAngle(0,1,0,rng.range(0,TAU)), .18, rng.r.bind(rng));
+  }
+  // tight outer course of stones right at the waterline
+  const rimCols = [color('#a49c83'), color('#918b76'), color('#7f7e6d'), color('#b3aa8f')];
+  for (let i=0;i<40;i++) {
+    const a = i/40*TAU + rng.range(-.035,.035);
+    const rr = 1.96 + rng.range(-.04,.06);
+    const x = POND.x + Math.cos(a)*rr, z = POND.z + Math.sin(a)*rr;
+    const q = quat.axisAngle(0,1,0,rng.range(0,TAU));
+    const sx = rng.range(.14,.26), sy = rng.range(.09,.16), sz = rng.range(.13,.23);
+    addSphere(stone, [x, .02 + sy*.55, z], sx, sy, sz, rimCols[i%rimCols.length], 7, 5, q, .2, rng.r.bind(rng));
+    if (i%7===0) {
+      const a2 = a + .08, r2 = rr + rng.range(.14,.24);
+      addSphere(stone, [POND.x+Math.cos(a2)*r2, .04, POND.z+Math.sin(a2)*r2],
+        rng.range(.06,.13), rng.range(.022,.05), rng.range(.05,.11), COL.stoneDark, 6, 4, q, .18, rng.r.bind(rng));
+    }
+  }
+  // a few larger feature rocks break up the necklace
+  for (const [a, rr, sx, sy, sz, col] of [
+    [.55, 2.02, .3, .17, .24, color('#a89f86')],
+    [2.35, 2.06, .26, .15, .21, color('#908a76')],
+    [4.15, 2.0, .34, .19, .26, color('#b5ac91')],
+    [5.35, 2.1, .24, .14, .2, color('#8a8674')],
+  ]) {
+    addSphere(stone, [POND.x+Math.cos(a)*rr, sy*.46, POND.z+Math.sin(a)*rr],
+      sx, sy, sz, col, 8, 5, quat.axisAngle(0,1,0,rng.range(0,TAU)), .18, rng.r.bind(rng));
+  }
+  // moss cushions tucked between the stones
+  for (let i=0;i<11;i++) {
+    const a = i/11*TAU + rng.range(-.16,.16), rr = 2.02 + rng.range(0,.16);
+    addSphere(G('ground'), [POND.x+Math.cos(a)*rr, .018, POND.z+Math.sin(a)*rr],
+      rng.range(.08,.16), rng.range(.022,.04), rng.range(.07,.14), COL.moss, 6, 3,
+      quat.axisAngle(0,1,0,rng.range(0,TAU)), .2, rng.r.bind(rng));
+  }
+  // a couple of flat stones to kneel on
+  addSphere(stone, [POND.x-1.66, .06, POND.z+1.14], .44, .07, .31, COL.stoneLight, 9, 5, quat.axisAngle(0,1,0,.4), .1, rng.r.bind(rng));
+  addSphere(stone, [POND.x+1.52, .055, POND.z+1.04], .36, .06, .27, COL.stone, 8, 5, quat.axisAngle(0,1,0,-.3), .12, rng.r.bind(rng));
+
+  // lily pads with a small notch
+  function lilyPad(dx, dz, radius, rot, col) {
+    const cx = POND.x + dx, cz = POND.z + dz, y = POND.waterY + .012;
+    const seg = 18, notch = .34, base = cloth.count;
+    cloth.vert([cx,y,cz], [0,1,0], col, .5, .5);
+    for (let i=0;i<=seg;i++) {
+      const a = rot + notch/2 + (i/seg)*(TAU-notch);
+      const rr = radius*(.93 + .07*Math.sin(a*3.1));
+      cloth.vert([cx+Math.cos(a)*rr, y, cz+Math.sin(a)*rr], [0,1,0], col, .5+Math.cos(a)*.5, .5+Math.sin(a)*.5);
+    }
+    for (let i=0;i<seg;i++) cloth.tri(base, base+i+1, base+i+2);
+  }
+  lilyPad(.58, .38, .21, .8, color('#51743f'));
+  lilyPad(-.3, .55, .17, 2.4, color('#5b7d48'));
+  lilyPad(.2, -.6, .23, 4.1, color('#4a6c3b'));
+  lilyPad(-.62, -.22, .16, 5.5, color('#5e804b'));
+  lilyPad(.74, -.2, .13, 1.5, color('#4e7040'));
+  lilyPad(-.08, .05, .11, 3.1, color('#557845'));
+
+  // one lotus in bloom: an upright cup of petals, not a flat plate
+  const lx = POND.x - .45, lz = POND.z + .42, ly = POND.waterY + .015;
+  for (let ring=0; ring<2; ring++) {
+    const n = ring? 6 : 8, rad = ring? .035 : .055;
+    for (let i=0;i<n;i++) {
+      const a = i/n*TAU + ring*.4;
+      const q = quat.mul(quat.axisAngle(0,1,0,a), quat.axisAngle(1,0,0, ring? .32 : .55));
+      addSphere(cloth, [lx+Math.cos(a)*rad, ly+.055+ring*.012, lz+Math.sin(a)*rad],
+        .032, .062, .02, color(ring?'#ecc9bf':'#e2b3a8'), 6, 4, q);
+    }
+  }
+  addSphere(cloth, [lx, ly+.075, lz], .026, .022, .026, color('#d7b458'), 7, 5);
+
+  // cattails and reeds on the far bank
+  for (let i=0;i<7;i++) {
+    const a = -2.5 + i*.21;
+    const rr = POND.rimR + rng.range(-.02,.14);
+    const x = POND.x + Math.cos(a)*rr, z = POND.z + Math.sin(a)*rr;
+    const h = .55 + rng.range(0,.4);
+    const lean = rng.range(-.06,.06);
+    addCylinder(bamboo, [x,.02,z], [x+lean,h,z+lean*.6], .015,.007,5,COL.bambooDark,false);
+    if (i%2===0) addCylinder(cloth, [x+lean,h-.03,z+lean*.6], [x+lean*1.4,h+.13,z+lean*.8], .03,.021,6,color('#6d4c32'));
+  }
+
+  addInteractable({ name:'鱼塘', type:'pond', pos:[POND.x,.18,POND.z], radius:1.95,
+    hint:'一池清水，几尾锦鲤在荷叶下打转。点一下，撒把鱼食。' });
 }
 
 function buildProps() {
@@ -2141,6 +2244,20 @@ function buildWaterInstances() {
     pos:[VAT.x, VAT.waterY||.72, VAT.z], radius:.54,
     color:[.055,.12,.12,.82], phase:env.elapsed*.4, type:2, alpha:.9, wave:1,
   });
+  // pond surface, calm and a shade greener than the vat; reaches under the shore stones
+  waterInstances.push({
+    pos:[POND.x, POND.waterY, POND.z], radius:POND.rimR - .02,
+    color:[.03,.09,.078,.58], phase:env.elapsed*.22, type:2, alpha:.58, wave:1,
+  });
+  // koi ripples / rain rings on the pond
+  for (const r of POND.ripples) {
+    const k = clamp(r.age/r.life, 0, 1);
+    const a = (1-k)*(1-k)*.13*r.strength;
+    waterInstances.push({
+      pos:[r.x, POND.waterY+.008, r.z], radius:.05 + k*r.maxR,
+      color:[.34,.5,.46,a], phase:env.elapsed*2, type:1, alpha:a, wave:0,
+    });
+  }
   // rain puddles on beds
   const res=SOIL.res;
   let count=0;
@@ -2694,9 +2811,12 @@ ISet('birdCone', 'cone', true);
 ISet('birdStem', 'stem', true);
 ISet('butterflyBody', 'sphere', true);
 if (!instanceSets.wingDynamic) ISet('wingDynamic', 'leaf', true);
+ISet('fishBody', 'sphere', true);
+ISet('fishTail', 'sphere', true);
 
 const chickens = [];
 const butterflies = [];
+const fish = [];
 const agentRng = new RNG(91642);
 const CHICK_COL = {
   body: color('#e7d9b9'),
@@ -2773,6 +2893,14 @@ function updateChickens(dt) {
       }
       const bed=bedAt(c.x,c.z);
       if (bed) { c.x -= Math.sin(c.angle)*spd*1.5; c.z -= Math.cos(c.angle)*spd*1.5; c.targetAngle += 1.4; }
+      // chickens walk around the pond, never across it
+      const pdx=c.x-POND.x, pdz=c.z-POND.z, pdr=Math.hypot(pdx,pdz)||.001;
+      if (pdr < POND.rimR+.34) {
+        c.x = POND.x + pdx/pdr*(POND.rimR+.34);
+        c.z = POND.z + pdz/pdr*(POND.rimR+.34);
+        c.targetAngle = Math.atan2(pdx,pdz) + (Math.random()-.5)*1.2;
+        c.timer = .5 + Math.random()*.6;
+      }
     } else {
       c.bodyBob = damp(c.bodyBob,0,.2,dt);
     }
@@ -2874,6 +3002,93 @@ function buildButterflyInstances() {
       wings.push({pos:[b.x,b.y,b.z],scale:[.17,.1,.23],q,color:b.color,phase:b.phase+i*1.3,flex:0,type:6,extra:0,extra2:0,extra3:0,extra4:0});
       const q2=quat.yawPitch(b.heading+side*1.52, -.08 - flap*.4, side*.1);
       wings.push({pos:[b.x,b.y,b.z],scale:[.1,.07,.16],q:q2,color:WING_COL.pale,phase:b.phase+i*1.1,flex:0,type:6,extra:0,extra2:0,extra3:0,extra4:0});
+    }
+  }
+}
+// ── koi in the pond ─────────────────────────────────────────────────────────
+const KOI = [
+  { c:'#f05a17', p:'#f7ead4', t:'#efd0aa' },
+  { c:'#f6e8d4', p:'#d63c12', t:'#e6c9a8' },
+  { c:'#e04011', p:'#f8eeda', t:'#e2c39f' },
+  { c:'#efa21e', p:'#f6ecd8', t:'#cf9f46' },
+  { c:'#2a2620', p:'#e8a020', t:'#c98a33' },
+  { c:'#ef6a22', p:'#f6e7d2', t:'#e9d3b8' },
+  { c:'#f26a1c', p:'#d94a14', t:'#dfc19c' },
+];
+function initPondFish() {
+  const rng = new RNG(77812);
+  for (let i=0;i<7;i++) {
+    const k = KOI[i%KOI.length];
+    fish.push({
+      angle: rng.range(0,TAU), orbit: rng.range(.34,1.0),
+      dir: i%3===0 ? -1 : 1, speed: rng.range(.14,.28),
+      size: rng.range(1.12,1.42), y: .099 + rng.range(0,.018),
+      phase: rng.range(0,TAU), fx:0, fz:0,
+      color: color(k.c), patch: color(k.p), tail: color(k.t),
+    });
+  }
+  buildPondInstances();
+}
+function spawnPondRipple(x, z, strength = 1) {
+  POND.ripples.push({ x, z, age:0, life:1.5+Math.random()*.8, maxR:.18+Math.random()*.24, strength });
+  if (POND.ripples.length > 10) POND.ripples.shift();
+}
+function feedPond() {
+  POND.feedTimer = 6.5;
+  for (let i=0;i<3;i++) {
+    const a=Math.random()*TAU, rr=Math.random()*.5;
+    spawnPondRipple(POND.x+Math.cos(a)*rr, POND.z+Math.sin(a)*rr, 1.2);
+  }
+  showToast('撒了一把麸皮，几尾锦鲤浮上来抢食');
+}
+function updatePond(dt) {
+  POND.feedTimer = Math.max(0, POND.feedTimer - dt);
+  for (const f of fish) {
+    const boost = POND.feedTimer > 0 ? 2.1 : 1;
+    f.angle += f.dir * f.speed * boost * dt;
+    const tx = POND.feedTimer > 0 ? Math.cos(f.phase*2.3)*.42 : 0;
+    const tz = POND.feedTimer > 0 ? Math.sin(f.phase*1.7)*.34 : 0;
+    f.fx = damp(f.fx, tx, .9, dt);
+    f.fz = damp(f.fz, tz, .9, dt);
+  }
+  const raining = env.rain > .28;
+  POND.rippleTimer -= dt;
+  if (POND.rippleTimer <= 0) {
+    POND.rippleTimer = raining ? .16 + Math.random()*.2 : 1.2 + Math.random()*2.4;
+    const a=Math.random()*TAU, rr=Math.sqrt(Math.random())*(POND.r-.3);
+    spawnPondRipple(POND.x+Math.cos(a)*rr, POND.z+Math.sin(a)*rr, raining?.55:1);
+  }
+  for (let i=POND.ripples.length-1;i>=0;i--) {
+    const r=POND.ripples[i];
+    r.age += dt;
+    if (r.age >= r.life) POND.ripples.splice(i,1);
+  }
+}
+function buildPondInstances() {
+  const bodies = instanceSets.fishBody.items, tails = instanceSets.fishTail.items;
+  bodies.length = 0; tails.length = 0;
+  const push = (set, pos, scale, q, col, phase) => set.push({
+    pos, scale, q, color:col, phase, flex:0, type:6, extra:0, extra2:0, extra3:0, extra4:0,
+  });
+  for (const f of fish) {
+    const a=f.angle, s=f.size;
+    const ox=POND.x+f.fx, oz=POND.z+f.fz;
+    const x=ox+Math.cos(a)*f.orbit, z=oz+Math.sin(a)*f.orbit*.9;
+    const y=f.y + Math.sin(env.elapsed*1.9+f.phase)*.012;
+    const heading = Math.atan2(-Math.sin(a)*f.orbit*f.dir, Math.cos(a)*f.orbit*.9*f.dir);
+    const q = quat.axisAngle(0,1,0,heading);
+    const fwd = [Math.sin(heading),0,Math.cos(heading)];
+    const right = [Math.cos(heading),0,-Math.sin(heading)];
+    push(bodies, [x,y,z], [.118*s,.066*s,.27*s], q, f.color, f.phase);
+    push(bodies, [x-fwd[0]*.03+right[0]*.01, y+.015, z-fwd[2]*.03+right[2]*.01], [.042*s,.034*s,.07*s], q, f.patch, f.phase+.4);
+    push(bodies, [x+fwd[0]*.145*s,y+.004,z+fwd[2]*.145*s], [.082*s,.055*s,.095*s], q, f.color, f.phase+.2);
+    const wig = Math.sin(env.elapsed*4.2+f.phase)*.42;
+    const qt = quat.axisAngle(0,1,0,heading+wig);
+    push(tails, [x-fwd[0]*.275*s,y-.004,z-fwd[2]*.275*s], [.095*s,.043*s,.078*s], qt, f.tail, f.phase);
+    for (const sd of [-1,1]) {
+      const qf = quat.axisAngle(0,1,0,heading+sd*1.05);
+      push(tails, [x+fwd[0]*.03+right[0]*sd*.07*s, y-.01, z+fwd[2]*.03+right[2]*sd*.07*s],
+        [.055*s,.018*s,.035*s], qf, f.tail, f.phase+.5);
     }
   }
 }
@@ -3152,6 +3367,11 @@ struct FSIn {
     } else if (typ > 4.5 && typ < 5.5) {
       rough = 0.55;
       emissive = emissive + albedo * 0.08;
+    } else if (typ > 5.5 && typ < 6.5) {
+      // koi: wet, tight highlight, a touch of lift so the colours read underwater
+      rough = 0.4;
+      metal = 0.0;
+      emissive = emissive + albedo * 0.06;
     } else if (typ > 7.5) {
       rough = 0.48;
       metal = 0.25;
@@ -3446,22 +3666,31 @@ struct WOut {
     return vec4f(in.color.rgb * flick, in.color.a);
   }
   let radial = length(in.uv - vec2f(0.5)) * 2.0;
-  let edge = smoothstep(1.0, 0.78, radial);
-  let n0 = normalize(vec3f(0.0, 1.0, 0.0));
+  let edge = smoothstep(1.0, 0.955, radial);
   let day = clamp(frame.sunColor.w * 1.6, 0.0, 1.0);
   let V = normalize(frame.camPos.xyz - in.wp);
-  let fres = pow(1.0 - clamp(dot(n0, V), 0.0, 1.0), 2.4);
-  let ripple = vec2f(sin(in.uv.x * 38.0 + frame.time.x * 1.8 + in.params.x), cos(in.uv.y * 44.0 - frame.time.x * 2.2 + in.params.x)) * 0.035;
+  let tt = frame.time.x;
+  // slow broad swells plus a finer chop, all in world space so the rings feel attached
+  let wx = in.wp.x * 2.4;
+  let wz = in.wp.z * 2.1;
+  let ripple = vec2f(
+    sin(wx + tt * 0.7 + in.params.x) * 0.5 + sin((wx + wz) * 2.1 - tt * 1.4) * 0.3,
+    cos(wz - tt * 0.55 + in.params.x) * 0.5 + cos((wx - wz) * 1.9 + tt * 1.1) * 0.3
+  ) * 0.038;
   let n = normalize(vec3f(ripple.x, 1.0, ripple.y));
+  let fres = pow(1.0 - clamp(dot(n, V), 0.0, 1.0), 2.2);
   let L = normalize(frame.sunDir.xyz);
   let H = normalize(L + V);
-  let spec = pow(max(dot(n, H), 0.0), 260.0) * smoothstep(0.0, 0.2, frame.sunDir.y);
+  let spec = pow(max(dot(n, H), 0.0), 150.0) * smoothstep(0.0, 0.2, frame.sunDir.y);
   var skyRef = mix(vec3f(0.022, 0.035, 0.045), vec3f(0.37, 0.52, 0.56), day);
   skyRef = mix(skyRef, frame.fog.rgb, 0.22);
-  let deep = in.color.rgb;
-  var col = mix(deep, skyRef, 0.14 + fres * 0.45);
-  col = col + vec3f(1.0, 0.9, 0.68) * spec * 0.55 * clamp(frame.sunColor.w, 0.0, 1.0);
-  let a = clamp(in.color.a * edge * (0.5 + fres * 0.36), 0.0, 0.86);
+  // at night the pond should hold the dark sky, not glow like a lamp
+  let nightF = clamp(frame.misc.z, 0.0, 1.0);
+  skyRef = mix(skyRef, vec3f(0.035, 0.06, 0.075), nightF);
+  let deep = in.color.rgb * (0.93 + 0.07 * sin(wx * 1.4 + wz * 1.9 + tt * 0.35));
+  var col = mix(deep, skyRef, 0.07 + fres * 0.5);
+  col = col + vec3f(1.0, 0.9, 0.68) * spec * 0.7 * clamp(frame.sunColor.w, 0.0, 1.0);
+  let a = clamp(in.color.a * edge * (0.56 + fres * 0.4), 0.0, 0.88);
   return vec4f(col, a);
 }
 `;
@@ -3962,7 +4191,7 @@ function updateFrameUniforms() {
   GPU.device.queue.writeBuffer(GPU.frameBuffer, 0, f);
 }
 
-function packWater(flat) {
+function packWater(flat, byteOffset = 0) {
   const n = Math.min(flat.length, GPU.waterCapacity);
   const data = new Float32Array(n * 12);
   for (let i=0;i<n;i++) {
@@ -3971,7 +4200,7 @@ function packWater(flat) {
     data[b+4]=w.color[0]; data[b+5]=w.color[1]; data[b+6]=w.color[2]; data[b+7]=w.color[3];
     data[b+8]=w.phase||0; data[b+9]=w.type||0; data[b+10]=w.alpha??1; data[b+11]=w.wave||0;
   }
-  if (n) GPU.device.queue.writeBuffer(GPU.waterBuffer, 0, data);
+  if (n) GPU.device.queue.writeBuffer(GPU.waterBuffer, byteOffset, data);
   return n;
 }
 function packParticles(flat) {
@@ -3989,7 +4218,7 @@ function renderFrame(particleFlat, waterFlat) {
   updateFrameUniforms();
   updateInstanceBuffers();
   const particleCount = packParticles(particleFlat || []);
-  const waterCount = packWater(waterFlat || []);
+  const waterCount = (waterFlat || []).length;
   updateSoilTextureIfDirty();
 
   const device = GPU.device;
@@ -4066,18 +4295,21 @@ function renderFrame(particleFlat, waterFlat) {
       pass.setVertexBuffer(0, GPU.baseGPU.get('puddle').vb);
       pass.setVertexBuffer(1, GPU.waterBuffer);
       pass.setIndexBuffer(GPU.baseGPU.get('puddle').ib, 'uint32');
-      const puddles = (waterFlat || []).filter(w => (w.type||0) !== 1);
-      const rings = (waterFlat || []).filter(w => (w.type||0) === 1);
+      const all = waterFlat || [];
+      const puddleBudget = Math.min(GPU.waterCapacity, all.filter(w => (w.type||0) !== 1).length);
+      const puddles = all.filter(w => (w.type||0) !== 1).slice(0, puddleBudget);
+      const rings = all.filter(w => (w.type||0) === 1).slice(0, GPU.waterCapacity - puddleBudget);
       if (puddles.length) {
-        // Repack only puddles contiguously for the first draw.
-        const tmp = packWater(puddles);
-        pass.setVertexBuffer(1, GPU.waterBuffer);
+        // Pack each group at its own offset so the queue writes do not overwrite one another.
+        const tmp = packWater(puddles, 0);
+        pass.setVertexBuffer(1, GPU.waterBuffer, 0, tmp * 48);
         pass.drawIndexed(GPU.baseGPU.get('puddle').indexCount, tmp);
       }
       if (rings.length) {
-        const tmp = packWater(rings);
+        const ringOffset = puddleBudget * 48;
+        const tmp = packWater(rings, ringOffset);
         pass.setVertexBuffer(0, GPU.baseGPU.get('ring').vb);
-        pass.setVertexBuffer(1, GPU.waterBuffer);
+        pass.setVertexBuffer(1, GPU.waterBuffer, ringOffset, tmp * 48);
         pass.setIndexBuffer(GPU.baseGPU.get('ring').ib, 'uint32');
         pass.drawIndexed(GPU.baseGPU.get('ring').indexCount, tmp);
       }
@@ -4176,6 +4408,7 @@ function buildWorld() {
   buildHills();
   buildGrass();
   buildProps();
+  buildPond();
 }
 
 function bindUI() {
@@ -4481,7 +4714,7 @@ function updateHoverCard() {
   } else if (hover.kind==='object') {
     ui.cropInfo.classList.remove('show');
     const o=hover.object;
-    setCursorLabel(x,y,o.name + (o.type==='vat'?' · 点击为水壶补水':''));
+    setCursorLabel(x,y,o.name + (o.type==='vat'?' · 点击为水壶补水':(o.type==='pond'?' · 点击撒鱼食':'')));
   } else {
     ui.cropInfo.classList.remove('show');
     ui.cursorLabel.classList.remove('show');
@@ -4620,6 +4853,10 @@ function handleClick(wasWatering) {
     refillCan();
     return;
   }
+  if (hover.kind==='object' && hover.object.type==='pond') {
+    feedPond();
+    return;
+  }
   if (hover.kind==='chicken') {
     hover.chicken.state='flee';
     hover.chicken.timer=1.8;
@@ -4706,6 +4943,7 @@ function updateWatering(dt) {
 function updateDynamicVisuals() {
   buildCropInstances();
   buildAgentInstances();
+  buildPondInstances();
 }
 function tick(now) {
   const dt = Math.min(.05, Math.max(.001, (now-lastFrame)/1000));
@@ -4718,6 +4956,7 @@ function tick(now) {
   updateHarvestAnims(dt);
   updateChickens(dt);
   updateButterflies(dt);
+  updatePond(dt);
   updateParticles(dt);
   if (pointerInside && GPU.ready) {
     autoHoverTick += dt;
@@ -4754,6 +4993,7 @@ async function boot() {
   buildWorld();
   initPlants();
   initAgents();
+  initPondFish();
   env.autoTime = true;
   updateEnvironment(.016);
   bindUI();
@@ -4782,7 +5022,8 @@ document.addEventListener('visibilitychange', () => { lastFrame=performance.now(
 boot();
 // Expose a compact debug handle for inspecting the living garden from the console.
 window.__garden = {
-  env, camera, state, plants, BEDS, basket, VAT, waterInstances, harvestAnims, SOIL,
+  env, camera, state, plants, BEDS, basket, VAT, POND, fish, waterInstances, harvestAnims, SOIL,
+  feedPond, spawnPondRipple,
   get GPU(){ return GPU; }, setWeather, updateEnvironment, harvestPlant, sowAt, toolActionAt,
   setHour(h){ env.hour=h; env.autoTime=false; updateEnvironment(.016); updateTimeUI(true); syncTimePlayUI(); },
   focus(x,z,dist=9,pitch=.32,yaw=.25){ camera.target=[x,.8,z]; camera.dist=dist; camera.pitch=pitch; camera.yaw=yaw; },
@@ -4800,7 +5041,7 @@ window.__garden = {
     const dt=1/30; const n=Math.ceil(seconds/dt);
     for(let i=0;i<n;i++){
       updateEnvironment(dt); updateSoil(dt); updatePlants(dt); updateWatering(dt); updateHarvestAnims(dt);
-      updateChickens(dt); updateButterflies(dt); updateParticles(dt);
+      updateChickens(dt); updateButterflies(dt); updatePond(dt); updateParticles(dt);
     }
     updateSoilTexture(1); updateDynamicVisuals(); buildParticleFlat(); buildWaterInstances();
     updateTimeUI(true); updateBasketUI(); updateCanUI();
